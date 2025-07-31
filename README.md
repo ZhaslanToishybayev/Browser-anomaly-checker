@@ -10,11 +10,6 @@
 
 🧠 **Advanced web security tool that detects browser anomalies, headless environments, and analyzes user behavior patterns in real-time. Built with vanilla JavaScript for maximum compatibility and performance.**
 
-## 🎯 Live Demo
-
-**[👉 Try it now!](https://zhaslantoishybayev.github.io/browser-anomaly-checker)**
-
-![Browser Anomaly Checker Demo](https://via.placeholder.com/800x400/667eea/ffffff?text=Browser+Anomaly+Checker+Demo)
 
 ## ✨ Key Features
 
