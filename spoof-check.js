@@ -7,7 +7,7 @@ class SpoofChecker {
   constructor() {
     this.results = {};
     this.riskScore = 0;
-    this.maxRisk = 10;
+    this.maxRisk = 20; // Увеличили максимальный риск из-за новых проверок
     this.init();
   }
 
@@ -30,6 +30,10 @@ class SpoofChecker {
     this.checkWebGL();
     this.checkPermissions();
     this.checkBatteryAPI();
+    this.checkCanvasFingerprint();
+    this.checkAudioContext();
+    this.checkAdvancedPermissions();
+    this.checkNavigatorProperties();
   }
 
   checkUserAgent() {
@@ -234,12 +238,217 @@ class SpoofChecker {
   checkBatteryAPI() {
     // Проверяем Battery API (deprecated, но может быть индикатором)
     const hasBatteryAPI = 'getBattery' in navigator;
-    
+
     this.results.battery = {
       hasAPI: hasBatteryAPI,
       suspicious: false, // Отсутствие Battery API нормально
       risk: 0
     };
+  }
+
+  checkCanvasFingerprint() {
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      // Устанавливаем размер canvas
+      canvas.width = 200;
+      canvas.height = 50;
+
+      // Рисуем текст с различными стилями
+      ctx.textBaseline = 'top';
+      ctx.font = '14px Arial';
+      ctx.fillStyle = '#f60';
+      ctx.fillRect(125, 1, 62, 20);
+
+      ctx.fillStyle = '#069';
+      ctx.fillText('Canvas fingerprint test 🔍', 2, 15);
+
+      ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+      ctx.fillText('Canvas fingerprint test 🔍', 4, 17);
+
+      // Добавляем геометрические фигуры
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = 'rgb(255,0,255)';
+      ctx.beginPath();
+      ctx.arc(50, 50, 50, 0, Math.PI * 2, true);
+      ctx.closePath();
+      ctx.fill();
+
+      // Получаем fingerprint
+      const canvasData = canvas.toDataURL();
+      const canvasHash = this.simpleHash(canvasData);
+
+      // Известные хеши для headless браузеров
+      const suspiciousHashes = [
+        '1234567890', // Пример подозрительного хеша
+        '0987654321', // Еще один пример
+      ];
+
+      const isSuspicious = suspiciousHashes.includes(canvasHash) ||
+                          canvasData.length < 5000; // Слишком короткий результат
+
+      this.results.canvasFingerprint = {
+        hash: canvasHash,
+        dataLength: canvasData.length,
+        suspicious: isSuspicious,
+        risk: isSuspicious ? 3 : 0
+      };
+
+      if (isSuspicious) this.riskScore += 3;
+
+    } catch (error) {
+      this.results.canvasFingerprint = {
+        error: error.message,
+        suspicious: true,
+        risk: 2
+      };
+      this.riskScore += 2;
+    }
+  }
+
+  checkAudioContext() {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const analyser = audioContext.createAnalyser();
+      const gainNode = audioContext.createGain();
+      const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      // Создаем уникальную аудио-подпись
+      oscillator.type = 'triangle';
+      oscillator.frequency.value = 10000;
+
+      gainNode.gain.value = 0;
+      oscillator.connect(analyser);
+      analyser.connect(scriptProcessor);
+      scriptProcessor.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      oscillator.start(0);
+
+      // Получаем fingerprint через анализ частот
+      const frequencyData = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(frequencyData);
+
+      const audioHash = this.simpleHash(Array.from(frequencyData).join(''));
+
+      oscillator.stop();
+      audioContext.close();
+
+      // Проверяем на подозрительные значения
+      const isSuspicious = audioHash === '0' || frequencyData.every(val => val === 0);
+
+      this.results.audioContext = {
+        hash: audioHash,
+        sampleRate: audioContext.sampleRate,
+        suspicious: isSuspicious,
+        risk: isSuspicious ? 2 : 0
+      };
+
+      if (isSuspicious) this.riskScore += 2;
+
+    } catch (error) {
+      this.results.audioContext = {
+        error: error.message,
+        suspicious: true,
+        risk: 1
+      };
+      this.riskScore += 1;
+    }
+  }
+
+  checkAdvancedPermissions() {
+    if (!('permissions' in navigator)) {
+      this.results.advancedPermissions = {
+        available: false,
+        suspicious: true,
+        risk: 1
+      };
+      this.riskScore += 1;
+      return;
+    }
+
+    const permissionsToCheck = [
+      'notifications',
+      'geolocation',
+      'camera',
+      'microphone'
+    ];
+
+    const permissionResults = {};
+    let suspiciousCount = 0;
+
+    Promise.all(
+      permissionsToCheck.map(async (permission) => {
+        try {
+          const result = await navigator.permissions.query({ name: permission });
+          permissionResults[permission] = result.state;
+
+          // Если все разрешения denied по умолчанию - подозрительно
+          if (result.state === 'denied') {
+            suspiciousCount++;
+          }
+        } catch (error) {
+          permissionResults[permission] = 'error';
+          suspiciousCount++;
+        }
+      })
+    ).then(() => {
+      const allDenied = suspiciousCount === permissionsToCheck.length;
+
+      this.results.advancedPermissions = {
+        permissions: permissionResults,
+        allDenied: allDenied,
+        suspicious: allDenied,
+        risk: allDenied ? 2 : 0
+      };
+
+      if (allDenied) this.riskScore += 2;
+    }).catch(() => {
+      this.results.advancedPermissions = {
+        error: 'Permission check failed',
+        suspicious: true,
+        risk: 1
+      };
+      this.riskScore += 1;
+    });
+  }
+
+  checkNavigatorProperties() {
+    const suspiciousProperties = {
+      cookieEnabled: navigator.cookieEnabled === false,
+      onLine: navigator.onLine === false,
+      doNotTrack: navigator.doNotTrack === '1',
+      maxTouchPoints: navigator.maxTouchPoints === 0,
+      pdfViewerEnabled: navigator.pdfViewerEnabled === false
+    };
+
+    const suspiciousCount = Object.values(suspiciousProperties).filter(Boolean).length;
+    const isSuspicious = suspiciousCount >= 3;
+
+    this.results.navigatorProperties = {
+      properties: suspiciousProperties,
+      suspiciousCount: suspiciousCount,
+      suspicious: isSuspicious,
+      risk: isSuspicious ? 2 : 0
+    };
+
+    if (isSuspicious) this.riskScore += 2;
+  }
+
+  // Простая хеш-функция для fingerprinting
+  simpleHash(str) {
+    let hash = 0;
+    if (str.length === 0) return hash.toString();
+
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Конвертируем в 32-битное число
+    }
+
+    return Math.abs(hash).toString(16);
   }
 
   getRiskLevel() {
@@ -335,7 +544,11 @@ class SpoofChecker {
       timezone: 'Timezone',
       webgl: 'WebGL Support',
       permissions: 'Permissions API',
-      battery: 'Battery API'
+      battery: 'Battery API',
+      canvasFingerprint: 'Canvas Fingerprint',
+      audioContext: 'Audio Context',
+      advancedPermissions: 'Advanced Permissions',
+      navigatorProperties: 'Navigator Properties'
     };
     return names[key] || key;
   }
